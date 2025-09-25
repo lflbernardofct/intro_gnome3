@@ -1,6 +1,6 @@
 #/*****************************************************************************\
-#* Redes Integradas de Telecomunicacoes
-#* MIEEC/MEEC - FCT NOVA  2024/2025
+# * Redes Integradas de Telecomunicacoes
+# * MIEEC/MEEC/MERSIM - FCT NOVA  2025/2026
 # *
 # * Makefile
 # *
