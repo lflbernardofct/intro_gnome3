@@ -1,6 +1,6 @@
 /*****************************************************************************\
  * Redes Integradas de Telecomunicacoes
- * MIEEC/MEEC/MERSIM - FCT NOVA  2025/2026
+ * MEEC/MERSIM - FCT NOVA  2026/2027
  *
  * demofork.c
  *
