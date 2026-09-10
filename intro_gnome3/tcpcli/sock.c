@@ -1,14 +1,13 @@
 /*****************************************************************************\
  * Redes Integradas de Telecomunicacoes
- * MIEEC/MEEC/MERSIM - FCT NOVA  2025/2026
+ * MEEC/MERSIM - FCT NOVA  2026/2027
  *
  * sock.c
  *
- * Functions that handle network programming using sockets and Gtk+3
+ * Functions that handle network programming using sockets and Gtk+3.0
  *
  * @author  Luis Bernardo
 \*****************************************************************************/
-
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
@@ -30,6 +29,7 @@ extern void Log(const gchar *str);
 
 
 // Variables with local IP addresses
+static const char *devicename= NULL;
 static gboolean got_local_ip= FALSE; // Set local IP variables
 struct in_addr local_ipv4;// Local IPv4 address
 gboolean valid_local_ipv4; // TRUE if the local IPv4 address is valid
@@ -38,17 +38,33 @@ gboolean valid_local_ipv6; // TRUE if the local IPv6 address is valid
 
 
 
-// Sets the contents of the variables with the local IP addresses
+// Set the contents of the variables with the local IP addresses
 void set_local_IP() {
   if (!got_local_ip) {
-    valid_local_ipv6= init_local_ipv6(&local_ipv6);
     valid_local_ipv4= init_local_ipv4(&local_ipv4);
+    valid_local_ipv6= init_local_ipv6(&local_ipv6);
     got_local_ip= TRUE;
   }
 }
 
+// Get the local network device name
+static const char *get_device_name() {
+	static char buf[100];
+	if (system(
+		"ip link show | grep -v LOOPBACK | grep BROADCAST | awk '{ print $2 }' | sed '$ s/.$//' > /tmp/lixo0123456789.txt")<0)
+		return NULL;
+	FILE *fd = fopen("/tmp/lixo0123456789.txt", "r");
+	char *pt= fgets(buf,100,fd);
+	if (pt != NULL) {
+		pt[strlen(pt)-1]='\0';	// Remove pending '\n'
+	}
+	fclose(fd);
+	unlink("/tmp/lixo0123456789.txt");
 
-// Gets the local IPv4 address (device dev) using "ioctl" command
+	return pt;
+}
+
+// Get the local IPv4 address (device dev) using "ioctl" command
 static gboolean get_local_ipv4name_using_ioctl(const char *dev,
 		struct in_addr *addr) {
 	struct ifreq req;
@@ -68,12 +84,11 @@ static gboolean get_local_ipv4name_using_ioctl(const char *dev,
 	return TRUE;
 }
 
-// Gets the local IPv4 address (device dev) using command "ifconfig"
-static gboolean get_local_ipv4name_using_ifconfig(const char *dev, char *buf,
-		int buf_len) {
-	if (system("/sbin/ifconfig | grep -w inet | grep Bcast | head -1 | awk '{ print $2 }' | sed 's/addr\\://' > /tmp/lixo0123456789.txt")
+// Get the local IPv4 address (device dev) using command "ifconfig"
+static gboolean get_local_ipv4name_using_ifconfig(char *buf, int buf_len) {
+	if (system("/sbin/ifconfig | grep -w inet | grep broadcast | head -1 | awk '{ print $2 }' | sed 's/addr\\://' > /tmp/lixo0123456789.txt")
 			< 0)
-		return FALSE;;
+		return FALSE;
 	FILE *fd = fopen("/tmp/lixo0123456789.txt", "r");
 	int n = fread(buf, 1, buf_len, fd);
 	buf[n - 1] = '\0';
@@ -87,21 +102,27 @@ static gboolean get_local_ipv4name_using_ifconfig(const char *dev, char *buf,
 	return TRUE;
 }
 
-// Gets local IPv4 address
+// Get local IPv4 address
 gboolean init_local_ipv4(struct in_addr *ip) {
-	char nome[265];
+	char name[265];
 	struct hostent *hp;
 
 	assert(ip != NULL);
-	if (get_local_ipv4name_using_ioctl("eth0", ip))
-		return TRUE;
-	if (!get_local_ipv4name_using_ifconfig("eth0", nome, sizeof(nome)))
-		if (gethostname(nome, 256)) {
+	devicename= get_device_name();
+	if (devicename != NULL) {
+		printf("device name='%s'\n",devicename);
+		if (get_local_ipv4name_using_ioctl(devicename, ip))
+			return TRUE;
+	} else {
+		Log("no device name found\n");
+	}
+	if (!get_local_ipv4name_using_ifconfig(name, sizeof(name)))
+		if (gethostname(name, 256)) {
 			Log("Failed to get the machine's name\n");
 			return FALSE;
 		}
-	printf("Local name = %s\n", nome);
-	hp = gethostbyname2(nome, AF_INET);
+	printf("Local name = %s\n", name);
+	hp = gethostbyname2(name, AF_INET);
 	if (hp == 0) {
 		Log("This machine does not have an IPv4 address\n");
 		inet_pton(AF_INET, "127.0.0.1", ip);
@@ -113,14 +134,14 @@ gboolean init_local_ipv4(struct in_addr *ip) {
 }
 
 /*
- The ioctl SIOCGIFADDR works fine for v4 but gives EINVAL for v6.
+ The ioctl SIOCGIFADDR works fine for v4 but usually returns EINVAL for v6.
  */
 
-// Gets the local IPv6 address (device dev) using command "ifconfig"
+// Get the local IPv6 address (device dev) using command "ifconfig"
 static gboolean get_local_ipv6name_using_ifconfig(const char *dev, char *buf,
 		int buf_len) {
-	if (system("/sbin/ifconfig | grep inet6 | grep 'Scope:Global' | head -1 | awk '{ print $3 }' > /tmp/lixo0123456789.txt")
-			< 0)
+	if (system("/sbin/ifconfig | grep inet6 | grep -i 'global' | head -1 | awk '{ print $2 }' > /tmp/lixo0123456789.txt")
+				< 0)
 		return FALSE;
 	FILE *fd = fopen("/tmp/lixo0123456789.txt", "r");
 	int n = fread(buf, 1, buf_len, fd);
@@ -131,26 +152,29 @@ static gboolean get_local_ipv6name_using_ifconfig(const char *dev, char *buf,
 		return FALSE;
 	if (n >= 256)
 		return FALSE;
-	char *p = strchr(buf, '/');
+	char *p = strchr(buf, '\n');
 	if (p == NULL)
 		return FALSE;
 	*p = '\0';
 	return TRUE;
 }
 
-// Gets the local IPv6 address
+// Get the local IPv6 address
 gboolean init_local_ipv6(struct in6_addr *ip) {
-	char nome[256];
+	char name[256];
 	struct hostent *hp;
 
 	assert(ip != NULL);
-	if (!get_local_ipv6name_using_ifconfig("eth0", nome, sizeof(nome)))
-		if (gethostname(nome, 256)) {
+	if (devicename == NULL) {
+		Log("No network device available\n");
+	}
+	if (!get_local_ipv6name_using_ifconfig(devicename, name, sizeof(name)))
+		if (gethostname(name, 256)) {
 			Log("Failed to get the machine's name\n");
 			return FALSE;
 		}
-//	printf("Local name = %s\n", nome);
-	hp = gethostbyname2(nome, AF_INET6);
+	printf("Local name = %s\n", name);
+	hp = gethostbyname2(name, AF_INET6);
 	if (hp == 0) {
 		Log("This machine does not have an IPv6 global address\n");
 		inet_pton(AF_INET6, "::1", ip);
@@ -162,7 +186,7 @@ gboolean init_local_ipv6(struct in6_addr *ip) {
 }
 
 
-// Returns TRUE if 'ip_str' is a local address
+// Return TRUE if 'ip_str' is a local address
 // BUGS: It only works for 1 address per host
 gboolean is_local_ip(const char *ip_str) {
   assert(ip_str != NULL);
@@ -186,7 +210,7 @@ gboolean is_local_ip(const char *ip_str) {
 }
 
 
-// Converts "::1" to the local global address
+// Convert "::1" to the local global address
 void translate_local_ip(struct in6_addr *ip) {
   assert(ip != NULL);
   if (valid_local_ipv6 && !strcmp(addr_ipv6(ip), "::1"))
@@ -195,7 +219,7 @@ void translate_local_ip(struct in6_addr *ip) {
 }
 
 
-// Converts IPv4 address to the IPv6 equivalent address ::ffff:IPv4
+// Convert IPv4 address to the IPv6 equivalent address ::ffff:IPv4
 gboolean translate_ipv4_to_ipv6(const char *ipv4_str, struct in6_addr *ipv6) {
   assert((ipv4_str != NULL) && (ipv6 != NULL));
   char temp_address[80];
@@ -205,7 +229,7 @@ gboolean translate_ipv4_to_ipv6(const char *ipv4_str, struct in6_addr *ipv6) {
 
 
 
-// Reads an IPv6 Multicast address
+// Read an IPv6 Multicast address
 gboolean get_IPv6(const gchar *textIP, struct in6_addr *addrv6) {
   struct in_addr addrv4;
 
@@ -227,7 +251,7 @@ gboolean get_IPv6(const gchar *textIP, struct in6_addr *addrv6) {
 }
 
 
-// Reads an IPv4 Multicast address
+// Read an IPv4 Multicast address
 gboolean get_IPv4(const gchar *textIP, struct in_addr *addrv4) {
   assert(addrv4 != NULL);
   if (inet_pton(AF_INET, textIP, addrv4)) {
@@ -244,28 +268,28 @@ gboolean get_IPv4(const gchar *textIP, struct in_addr *addrv4) {
 }
 
 
-// Returns a static temporary string with an IPv4 address
+// Return a static temporary string with an IPv4 address
 char *addr_ipv4(struct in_addr *addr) {
 	static char buf[16];
 	inet_ntop(AF_INET, addr, buf, sizeof(buf));
 	return buf;
 }
 
-// Returns a static temporary string with an IPv6 address
+// Return a static temporary string with an IPv6 address
 char *addr_ipv6(struct in6_addr *addr) {
 	static char buf[100];
 	inet_ntop(AF_INET6, addr, buf, sizeof(buf));
 	return buf;
 }
 
-// Initializes an IPv4 socket
+// Initialize an IPv4 socket
 //  dom = SOCK_DGRAM or SOCK_STREAM
 //  Returns: -1 - error;  >0 - socket number
-int init_socket_ipv4(int dom, int port, gboolean shared) {
+int init_socket_ipv4(int dom, int porto, gboolean shared) {
 	struct sockaddr_in name;
 	int s;
 
-	// Creates an IPv4 socket
+	// Create an IPv4 socket
 	s = socket(AF_INET, dom, 0);
 	if (s < 0) {
 		perror("IPv4 socket creation");
@@ -285,10 +309,10 @@ int init_socket_ipv4(int dom, int port, gboolean shared) {
 		}
 	}
 
-	// Associates a socket to a port number
+	// Associate a socket to a port number
 	name.sin_family = AF_INET; // IPv4 address domain
 	name.sin_addr.s_addr = INADDR_ANY; // IP local host (0.0.0.0)
-	name.sin_port = htons((short) port); // Port number
+	name.sin_port = htons((short) porto); // Port number
 	if (bind(s, (struct sockaddr *) &name, sizeof(name))) {
 		if (errno == EINVAL) {
 			Log("The IPv4 socket is already associated to a port\n");
@@ -299,14 +323,14 @@ int init_socket_ipv4(int dom, int port, gboolean shared) {
 	return s;
 }
 
-// Initializes an IPv6 socket
+// Initialize an IPv6 socket
 //  dom = SOCK_DGRAM or SOCK_STREAM
 //  Returns: -1 - error;  >0 - socket number
 int init_socket_ipv6(int dom, int port, gboolean shared) {
 	struct sockaddr_in6 name;
 	int s;
 
-	// Creates an IPv6 socket
+	// Create an IPv6 socket
 	s = socket(AF_INET6, dom, 0);
 	if (s < 0) {
 		perror("IPv6 socket creation");
@@ -314,7 +338,7 @@ int init_socket_ipv6(int dom, int port, gboolean shared) {
 	}
 
 	if (shared) {
-		/* Makes the IP/port of the socket sharable - allows several servers to be associated
+		/* Make the IP/port of the socket sharable - allows several servers to be associated
 		 * to the same port in the same IP address */
 		int reuse = 1;
 
@@ -326,7 +350,7 @@ int init_socket_ipv6(int dom, int port, gboolean shared) {
 		}
 	}
 
-	// Associates a socket to a port number
+	// Associate a socket to a port number
 	name.sin6_family = AF_INET6; // IPv6 address domain
 	name.sin6_addr = in6addr_any; // ::
 	name.sin6_flowinfo = 0;
@@ -341,7 +365,7 @@ int init_socket_ipv6(int dom, int port, gboolean shared) {
 	return s;
 }
 
-// Returns the port number associated to a socket
+// Return the port number associated to a socket
 int get_portnumber(int s) {
 	struct sockaddr_in6 name;
 	guint n = sizeof(name);
@@ -361,7 +385,7 @@ int get_portnumber(int s) {
 	return ntohs(name.sin6_port);
 }
 
-// Reads data from an IPv4 UDP socket
+// Read data from an IPv4 socket
 // Returns the number of byte read (<0 in case of error) and the sender's address and port
 int read_data_ipv4(int sock, char *buf, int n, struct in_addr *ip,
 		short unsigned int *port) {
@@ -383,7 +407,7 @@ int read_data_ipv4(int sock, char *buf, int n, struct in_addr *ip,
 	return m;
 }
 
-// Reads data from an IPv6 UDP socket
+// Read data from an IPv6 socket
 // Returns the number of byte read (<0 in case of error) and the sender's address and port
 int read_data_ipv6(int sock, char *buf, int n, struct in6_addr *ip,
 		short unsigned int *port) {
@@ -465,7 +489,7 @@ void free_gio_channel(GIOChannel *chan) {
 }
 
 // Cancel callback registration in the GIO main loop and free the resources allocated
-void remove_socket_from_mainloop(int sock, int chan_id, GIOChannel *chan) {
+void remove_socket_from_mainloop(int sock, guint chan_id, GIOChannel *chan) {
 	assert(sock >= 0);
 	assert(chan != NULL);
 	/* Remove socket from Gtk main loop */
@@ -481,4 +505,3 @@ void close_socket(int sock)
 		return;
 	close(sock);
 }
-
